@@ -1,6 +1,3 @@
-Here's your content formatted in Markdown:
-
-````markdown
 # Blue Light Filter Script
 
 This Bash script (`bluelightfilter.sh`) automatically adjusts your screen's warmth (gamma settings) to reduce blue light exposure based on the time of day, local weather conditions, and whether a fullscreen application is running. It uses `xrandr` to modify screen gamma, making it warmer at night or during cloudy weather to promote better sleep and reduce eye strain.
