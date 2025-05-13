@@ -9,6 +9,7 @@ This Bash script (`bluelightfilter.sh`) automatically adjusts your screen's warm
 - **Fullscreen Detection**: Reverts to neutral gamma when a fullscreen application (e.g., video player or game) is active to preserve color accuracy.
 - **Caching**: Minimizes API calls by caching location coordinates, sunrise/sunset times, and weather data for 24 hours or 1 hour, respectively.
 - **Logging**: Maintains a log file for debugging and monitoring.
+- **Multi Screen Support**: Added thanks to @dm+ (from PCLOS forum)
 
 ## Prerequisites
 
@@ -59,6 +60,13 @@ Run the script with the default location (Santiago, Chile) or specify a custom l
 
 ```bash
 ./bluelightfilter.sh -location "New York, USA"
+```
+
+### Other params:
+
+```bash
+-nofs # No fullscreen detection
+-noweather # Skip weather checks
 ```
 
 ### Running in the Background
