@@ -22,6 +22,10 @@ CLOUDY_GAMMA="1.0:0.95:0.85"    # Intermediate
 # Current gamma state
 CURRENT_GAMMA="$NEUTRAL_GAMMA"  # Initialize with neutral gamma
 
+# Flags for new parameters
+NO_FULLSCREEN=0
+NO_WEATHER=0
+
 # Check for required tools
 check_tools() {
     local tools=("curl" "jq" "xrandr")
@@ -35,6 +39,10 @@ check_tools() {
 
 # Check for fullscreen detection tools (in order of preference)
 check_fullscreen_tool() {
+    if [[ $NO_FULLSCREEN -eq 1 ]]; then
+        FULLSCREEN_TOOL="none"
+        return
+    fi
     if command -v xdotool &>/dev/null; then
         FULLSCREEN_TOOL="xdotool"
     elif command -v wmctrl &>/dev/null; then
@@ -64,6 +72,14 @@ parse_args() {
             -location)
                 LOCATION="$2"
                 shift 2
+                ;;
+            -nofs)
+                NO_FULLSCREEN=1
+                shift
+                ;;
+            -noweather)
+                NO_WEATHER=1
+                shift
                 ;;
             *)
                 echo "Unknown option: $1" | tee -a "$LOG_FILE"
@@ -178,6 +194,11 @@ is_daytime() {
 
 # Get weather from OpenMeteo API (no API key required)
 get_weather() {
+    if [[ $NO_WEATHER -eq 1 ]]; then
+        WEATHER="unknown"
+        return
+    fi
+
     if [[ -f "$WEATHER_CACHE" && $(( $(date +%s) - $(stat -c %Y "$WEATHER_CACHE") )) -lt 3600 ]]; then
         WEATHER=$(cat "$WEATHER_CACHE")
         echo "Using cached weather: $WEATHER" | tee -a "$LOG_FILE"
@@ -214,6 +235,10 @@ get_weather() {
 
 # Check if an application is in fullscreen
 is_fullscreen() {
+    if [[ $NO_FULLSCREEN -eq 1 ]]; then
+        return 1 # Skip fullscreen check
+    fi
+
     case "$FULLSCREEN_TOOL" in
         xdotool)
             local active_window=$(xdotool getactivewindow)
@@ -255,13 +280,30 @@ is_fullscreen() {
     return 1
 }
 
-# Apply gamma settings
+# Apply gamma settings to all connected displays
 apply_gamma() {
     local gamma="$1"
     if [[ "$gamma" != "$CURRENT_GAMMA" ]]; then
-        xrandr --output "$(xrandr --current | grep ' connected' | awk '{print $1}' | head -n 1)" --gamma "$gamma"
+        # Get all connected displays
+        local display_array
+        IFS=$'\n' read -d '' -r -a display_array < <(xrandr --current | grep " connected" | awk '{print $1}' | grep -v '^$' | sort -u) || true
+
+        if [[ ${#display_array[@]} -eq 0 ]]; then
+            echo "Error: No connected displays found" | tee -a "$LOG_FILE"
+            return 1
+        fi
+
+        # Apply gamma to each display
+        for display in "${display_array[@]}"; do
+            if [[ -n "$display" ]]; then
+                if xrandr --output "$display" --gamma "$gamma" 2>>"$LOG_FILE"; then
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') - Applied gamma $gamma to $display" >> "$LOG_FILE"
+                else
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') - Failed to apply gamma to $display" >> "$LOG_FILE"
+                fi
+            fi
+        done
         CURRENT_GAMMA="$gamma"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Applied gamma: $gamma" >> "$LOG_FILE"
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Gamma unchanged: $gamma" >> "$LOG_FILE"
     fi
