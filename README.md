@@ -153,3 +153,6 @@ This project is licensed under the MIT License. See the LICENSE file for details
 * **APIs used**: OpenStreetMap, SunriseSunset, OpenMeteo.
 * **Tools**: `xrandr`, `curl`, `jq`, `xdotool`, `wmctrl`, `xwininfo`.
 
+## Crypto Tips
+https://plisio.net/donate/GevVszjz
+
