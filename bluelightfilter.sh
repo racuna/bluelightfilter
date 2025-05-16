@@ -285,8 +285,10 @@ apply_gamma() {
     local gamma="$1"
     if [[ "$gamma" != "$CURRENT_GAMMA" ]]; then
         # Get all connected displays
-        local display_array
+        local display_array old_ifs
+        old_ifs="$IFS"
         IFS=$'\n' read -d '' -r -a display_array < <(xrandr --current | grep " connected" | awk '{print $1}' | grep -v '^$' | sort -u) || true
+        IFS="$old_ifs"
 
         if [[ ${#display_array[@]} -eq 0 ]]; then
             echo "Error: No connected displays found" | tee -a "$LOG_FILE"
@@ -307,6 +309,18 @@ apply_gamma() {
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Gamma unchanged: $gamma" >> "$LOG_FILE"
     fi
+}
+
+# Reset gamma to neutral on script interruption
+reset_displays() {
+    local displays
+    IFS=$'\n' read -d '' -r -a displays < <(xrandr --current | grep " connected" | awk '{print $1}' | grep -v '^$' | sort -u) || true
+    for display in "${displays[@]}"; do
+        if [[ -n "$display" ]]; then
+            xrandr --output "$display" --gamma "$NEUTRAL_GAMMA" 2>>"$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - Reset gamma to $NEUTRAL_GAMMA on $display" >> "$LOG_FILE"
+        fi
+    done
 }
 
 # Main logic
@@ -359,9 +373,9 @@ main() {
         else
             apply_gamma "$NIGHT_GAMMA"
         fi
-
         sleep 3
     done
 }
 
+trap 'reset_displays; exit 130' INT HUP TERM
 main "$@"
