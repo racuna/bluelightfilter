@@ -12,7 +12,8 @@ LOG_FILE="$LOG_DIR/bluelightfilter.log"
 COORDINATES_CACHE="$CACHE_DIR/coordinates.cache"
 SUNRISE_SUNSET_CACHE="$CACHE_DIR/sunrise_sunset.cache"
 WEATHER_CACHE="$CACHE_DIR/weather.cache"
-CACHE_TTL=86400 # 24 hours in seconds
+CACHE_TTL=86400 # 24 hours in seconds for coordinates
+WEATHER_TTL=3600 # 1 hour in seconds for weather
 
 # Screen warmth settings (gamma values for xrandr)
 NEUTRAL_GAMMA="1.0:1.0:1.0"
@@ -93,8 +94,11 @@ parse_args() {
 get_coordinates() {
     if [[ -f "$COORDINATES_CACHE" && $(( $(date +%s) - $(stat -c %Y "$COORDINATES_CACHE") )) -lt $CACHE_TTL ]]; then
         read -r LAT LON < "$COORDINATES_CACHE"
-        echo "Using cached coordinates: $LAT, $LON" | tee -a "$LOG_FILE"
-        return
+        if [[ -n "$LAT" && -n "$LON" ]]; then
+            echo "Using cached coordinates: $LAT, $LON" | tee -a "$LOG_FILE"
+            return
+        fi
+        echo "Warning: Invalid coordinates in cache, fetching new data" | tee -a "$LOG_FILE"
     fi
 
     local query=$(echo "$LOCATION" | tr ' ' '+')
@@ -124,10 +128,21 @@ get_coordinates() {
 
 # Get sunrise and sunset times
 get_sunrise_sunset() {
-    if [[ -f "$SUNRISE_SUNSET_CACHE" && $(( $(date +%s) - $(stat -c %Y "$SUNRISE_SUNSET_CACHE") )) -lt $CACHE_TTL ]]; then
-        read -r SUNRISE SUNSET < "$SUNRISE_SUNSET_CACHE"
-        echo "Using cached sunrise/sunset: $SUNRISE, $SUNSET" | tee -a "$LOG_FILE"
-        return
+    local current_date=$(date +%Y-%m-%d)
+    local cache_date=""
+    local cached_sunrise=""
+    local cached_sunset=""
+
+    # Check if cache exists and read cache date
+    if [[ -f "$SUNRISE_SUNSET_CACHE" ]]; then
+        read -r cache_date cached_sunrise cached_sunset < "$SUNRISE_SUNSET_CACHE"
+        if [[ "$cache_date" == "$current_date" && -n "$cached_sunrise" && -n "$cached_sunset" ]]; then
+            SUNRISE="$cached_sunrise"
+            SUNSET="$cached_sunset"
+            echo "Using cached sunrise/sunset: $SUNRISE, $SUNSET (from $cache_date)" | tee -a "$LOG_FILE"
+            return
+        fi
+        echo "Cache outdated or invalid (date: $cache_date), fetching new sunrise/sunset" | tee -a "$LOG_FILE"
     fi
 
     local url="https://api.sunrisesunset.io/json?lat=$LAT&lng=$LON&date=today"
@@ -146,7 +161,6 @@ get_sunrise_sunset() {
 
     # Convert AM/PM to 24-hour format
     if [[ -n "$SUNRISE" && -n "$SUNSET" ]]; then
-        # Parse and convert sunrise
         SUNRISE=$(date -d "$SUNRISE" +%H:%M:%S 2>/dev/null || echo "07:00:00")
         SUNSET=$(date -d "$SUNSET" +%H:%M:%S 2>/dev/null || echo "20:00:00")
     else
@@ -161,8 +175,8 @@ get_sunrise_sunset() {
         SUNRISE="07:00:00"
         SUNSET="20:00:00"
     else
-        echo "$SUNRISE $SUNSET" > "$SUNRISE_SUNSET_CACHE"
-        echo "Fetched sunrise/sunset: $SUNRISE, $SUNSET" | tee -a "$LOG_FILE"
+        echo "$current_date $SUNRISE $SUNSET" > "$SUNRISE_SUNSET_CACHE"
+        echo "Fetched sunrise/sunset: $SUNRISE, $SUNSET for $current_date" | tee -a "$LOG_FILE"
     fi
 }
 
@@ -199,10 +213,13 @@ get_weather() {
         return
     fi
 
-    if [[ -f "$WEATHER_CACHE" && $(( $(date +%s) - $(stat -c %Y "$WEATHER_CACHE") )) -lt 3600 ]]; then
+    if [[ -f "$WEATHER_CACHE" && $(( $(date +%s) - $(stat -c %Y "$WEATHER_CACHE") )) -lt $WEATHER_TTL ]]; then
         WEATHER=$(cat "$WEATHER_CACHE")
-        echo "Using cached weather: $WEATHER" | tee -a "$LOG_FILE"
-        return
+        if [[ -n "$WEATHER" ]]; then
+            echo "Using cached weather: $WEATHER" | tee -a "$LOG_FILE"
+            return
+        fi
+        echo "Warning: Invalid weather in cache, fetching new data" | tee -a "$LOG_FILE"
     fi
 
     local url="https://api.open-meteo.com/v1/forecast?latitude=$LAT&longitude=$LON&current_weather=true"
@@ -330,9 +347,10 @@ main() {
     init_logging
     parse_args "$@"
     get_coordinates
+    get_sunrise_sunset  # Ensure sunrise/sunset is checked on startup
 
     local last_weather_check=0
-    local last_sun_check=0
+    local last_sun_check=$(date +%s)  # Initialize to current time
     local fullscreen_last_state=1
 
     while true; do
@@ -358,7 +376,7 @@ main() {
 
         if is_daytime; then
             # Check weather every hour during day
-            if [[ $(( $(date +%s) - last_weather_check )) -ge 3600 ]]; then
+            if [[ $(( $(date +%s) - last_weather_check )) -ge $WEATHER_TTL ]]; then
                 get_weather
                 last_weather_check=$(date +%s)
             fi
