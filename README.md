@@ -67,6 +67,9 @@ Run the script with the default location (Santiago, Chile) or specify a custom l
 ```bash
 -nofs # No fullscreen detection
 -noweather # Skip weather checks
+-sunrise HH:MM # Ignore API sunrise time (24H)
+-sunset HH:MM # Ignhore API sunset time (24H)
+-cleancache # Clean cache and force query to APIs
 ```
 
 ### Running in the Background
