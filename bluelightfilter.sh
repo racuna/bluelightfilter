@@ -23,9 +23,12 @@ CLOUDY_GAMMA="1.0:0.95:0.85"    # Intermediate
 # Current gamma state
 CURRENT_GAMMA="$NEUTRAL_GAMMA"  # Initialize with neutral gamma
 
-# Flags for new parameters
+# Flags for parameters
 NO_FULLSCREEN=0
 NO_WEATHER=0
+CLEAN_CACHE=0
+MANUAL_SUNRISE=""
+MANUAL_SUNSET=""
 
 # Check for required tools
 check_tools() {
@@ -58,6 +61,10 @@ check_fullscreen_tool() {
 
 # Initialize directories and log
 init_logging() {
+    if [[ $CLEAN_CACHE -eq 1 && -d "$CACHE_DIR" ]]; then
+        rm -rf "$CACHE_DIR"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Cleared cache directory: $CACHE_DIR" >> "$LOG_FILE"
+    fi
     mkdir -p "$CACHE_DIR" "$LOG_DIR"
     # Rotate log if older than 24 hours
     if [[ -f "$LOG_FILE" ]]; then
@@ -82,12 +89,34 @@ parse_args() {
                 NO_WEATHER=1
                 shift
                 ;;
+            -cleancache)
+                CLEAN_CACHE=1
+                shift
+                ;;
+            -sunrise)
+                MANUAL_SUNRISE="$2"
+                shift 2
+                ;;
+            -sunset)
+                MANUAL_SUNSET="$2"
+                shift 2
+                ;;
             *)
                 echo "Unknown option: $1" | tee -a "$LOG_FILE"
                 exit 1
                 ;;
         esac
     done
+}
+
+# Validate time format (HH:MM)
+validate_time() {
+    local time="$1"
+    if [[ "$time" =~ ^[0-2][0-9]:[0-5][0-9]$ ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Get coordinates from OpenStreetMap API
@@ -104,9 +133,9 @@ get_coordinates() {
     local query=$(echo "$LOCATION" | tr ' ' '+')
     local url="https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1"
     local response
-    response=$(curl -4 -s -m 5 -A "bluelightfilter.sh" "$url")
+    response=$(curl -4 -s - discos -m 5 -A "bluelightfilter.sh" "$url")
 
-    if [[ $? -ne 0 ]]; then
+    if [[ $? -ne  0 ]]; then
         echo "Error: Failed to fetch coordinates for $LOCATION" | tee -a "$LOG_FILE"
         LAT="-33.4489" # Default: Santiago, Chile
         LON="-70.6693"
@@ -133,6 +162,28 @@ get_sunrise_sunset() {
     local cached_sunrise=""
     local cached_sunset=""
 
+    # Validate manual sunrise and sunset times if provided
+    if [[ -n "$MANUAL_SUNRISE" ]]; then
+        if ! validate_time "$MANUAL_SUNRISE"; then
+            echo "Error: Invalid sunrise time format: $MANUAL_SUNRISE, using default 07:00" | tee -a "$LOG_FILE"
+            MANUAL_SUNRISE="07:00"
+        fi
+    fi
+    if [[ -n "$MANUAL_SUNSET" ]]; then
+        if ! validate_time "$MANUAL_SUNSET"; then
+            echo "Error: Invalid sunset time format: $MANUAL_SUNSET, using default 20:00" | tee -a "$LOG_FILE"
+            MANUAL_SUNSET="20:00"
+        fi
+    fi
+
+    # If both manual sunrise and sunset are provided, skip API and cache
+    if [[ -n "$MANUAL_SUNRISE" && -n "$MANUAL_SUNSET" ]]; then
+        SUNRISE="${MANUAL_SUNRISE}:00"
+        SUNSET="${MANUAL_SUNSET}:00"
+        echo "Using manual sunrise/sunset: $SUNRISE, $SUNSET" | tee -a "$LOG_FILE"
+        return
+    fi
+
     # Check if cache exists and read cache date
     if [[ -f "$SUNRISE_SUNSET_CACHE" ]]; then
         read -r cache_date cached_sunrise cached_sunset < "$SUNRISE_SUNSET_CACHE"
@@ -145,28 +196,42 @@ get_sunrise_sunset() {
         echo "Cache outdated or invalid (date: $cache_date), fetching new sunrise/sunset" | tee -a "$LOG_FILE"
     fi
 
-    local url="https://api.sunrisesunset.io/json?lat=$LAT&lng=$LON&date=today"
-    local response
-    response=$(curl -4 -s -m 5 "$url")
-
-    if [[ $? -ne 0 ]]; then
-        echo "Error: Failed to fetch sunrise/sunset times" | tee -a "$LOG_FILE"
-        SUNRISE="07:00:00"
-        SUNSET="20:00:00"
-        return
+    # Use manual sunrise or sunset if only one is provided
+    if [[ -n "$MANUAL_SUNRISE" ]]; then
+        SUNRISE="${MANUAL_SUNRISE}:00"
+    fi
+    if [[ -n "$MANUAL_SUNSET" ]]; then
+        SUNSET="${MANUAL_SUNSET}:00"
     fi
 
-    SUNRISE=$(echo "$response" | jq -r '.results.sunrise')
-    SUNSET=$(echo "$response" | jq -r '.results.sunset')
+    # Fetch from API only if at least one time is missing
+    if [[ -z "$SUNRISE" || -z "$SUNSET" ]]; then
+        local url="https://api.sunrisesunset.io/json?lat=$LAT&lng=$LON&date=today"
+        local response
+        response=$(curl -4 -s -m 5 "$url")
 
-    # Convert AM/PM to 24-hour format
-    if [[ -n "$SUNRISE" && -n "$SUNSET" ]]; then
-        SUNRISE=$(date -d "$SUNRISE" +%H:%M:%S 2>/dev/null || echo "07:00:00")
-        SUNSET=$(date -d "$SUNSET" +%H:%M:%S 2>/dev/null || echo "20:00:00")
-    else
-        echo "Error: Invalid sunrise/sunset data, using defaults" | tee -a "$LOG_FILE"
-        SUNRISE="07:00:00"
-        SUNSET="20:00:00"
+        if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to fetch sunrise/sunset times" | tee -a "$LOG_FILE"
+            SUNRISE=${SUNRISE:-"07:00:00"}
+            SUNSET=${SUNSET:-"20:00:00"}
+            return
+        fi
+
+        local api_sunrise=$(echo "$response" | jq -r '.results.sunrise')
+        local api_sunset=$(echo "$response" | jq -r '.results.sunset')
+
+        # Convert AM/PM to 24-hour format
+        if [[ -n "$api_sunrise" && -n "$api_sunset" ]]; then
+            api_sunrise=$(date -d "$api_sunrise" +%H:%M:%S 2>/dev/null || echo "07:00:00")
+            api_sunset=$(date -d "$api_sunset" +%H:%M:%S 2>/dev/null || echo "20:00:00")
+        else
+            echo "Error: Invalid sunrise/sunset data, using defaults" | tee -a "$LOG_FILE"
+            api_sunrise="07:00:00"
+            api_sunset="20:00:00"
+        fi
+
+        SUNRISE=${SUNRISE:-$api_sunrise}
+        SUNSET=${SUNSET:-$api_sunset}
     fi
 
     # Validate times
